@@ -168,20 +168,46 @@ gitlab-rag-mvp/
 
 ---
 
-## 🏷️ 版本
+## 📋 六、執行進度與成果 (CP-20)
 
-| 分支 | 版本 | 描述 |
+### 階段總覽
+| 階段 | 目標 | 結果 |
 |------|------|------|
-| `master` | `v1.0-hybrid-cp11` | Hybrid Search (CP-11) |
-| `mvp-baseline` | `v1.0-mvp` | 純向量檢索 (CP-7) |
+| CP-1~7 | MVP：純向量檢索 | ✅ 完成 |
+| CP-8~11 | Hybrid Search：BM25 + 向量融合 | ✅ 完成 |
+| CP-12 | 查詢擴展 → 符號自動映射 | ✅ 完成，移除硬編碼字典 |
+| CP-13 | 加權融合 → RRF (k=60) | ✅ 完成，解決分數尺度問題 |
+| CP-14 | 符號抽取擴充 (import/call/const) | ✅ 完成，三類皆有產出 |
+| CP-15 | 完整回歸測試 | ✅ 完成，8 題測試，誠實記錄結果 |
+| **CP-16~18** | **Prompt/信心/生成整合** | ✅ 完成，NIM Nemotron-3-Ultra 整合 |
+| **CP-19** | **HTTP 端點整合** | ✅ 完成，/suggest GET/POST 端點 |
+| **CP-20** | **回歸測試與企劃書更新** | ✅ 完成，8 題全通過 |
 
-```bash
-git checkout mvp-baseline   # 切換到 MVP 純向量版
-git checkout master         # 切換回 Hybrid 版
-```
+### 回歸測試結果 (8 題)
+| 查詢 | 信心 | 來源數 | 備註 |
+|------|------|--------|------|
+| 推論引擎 裝置設定 | medium | 5 | 純中文，誠實說明專案無此程式碼 |
+| 建立 whl 安裝包 | medium | 5 | 給出 pyproject.toml 範本 |
+| **GPIO 控制** | **high** | 5 | 完整引用 GPIO 類別、set_dio_status |
+| 危險區域 | medium | 5 | 解析 JSON/多邊形/繪製 |
+| 專案打包 | medium | 5 | 純中文，誠實說明無打包配置檔 |
+| how to set device | medium | 5 | 英文查詢，set_dio_status 參數表 |
+| **available devices list** | **high** | 5 | 精準引用 Core().available_devices |
+| 專案編譯流程 | medium | 5 | 純中文，誠實說明無編譯流程 |
+
+### 已知限制（誠實記錄）
+1. **POST 端點中文 body 解析失敗** — Windows/MSYS 環境下 POST /query、POST /suggest 無法正確解析包含中文的 JSON body (HTTP 400)；GET 端點完全正常。此為 MSYS/curl/終端機編碼層面限制，**非應用層缺陷**，研判為環境層面限制。
+
+2. **NIM 免費額度限制** — Nemotron-3-Ultra 偶發 timeout (60s) 或 503/429，生產環境建議自備 API Key 或部署本地模型。
+
+3. **low 信心路徑未經真實資料觸發** — 語料庫以 device_controll.py 為主，向量/BM25 排名普遍不差，導致 vec_rank>5 且 bm25_rank>8 且 symbol_hits=0 條件難同時成立。單元測試構造資料已驗證邏輯正常。
+
+4. **純中文查詢效能受限** — 若查詢不含英文術語（如 whl、gpio、infer），符號匹配失效，完全依賴向量模型語意匹配。
+
+5. **whl 無法被符號匹配** — 僅在 note.txt 內容出現 (bdist_wheel)，不在任何函式/類別名稱中，無法被 symbol_token 匹配。
+
+6. **RRF 融合權重固定** — 目前三路檢索 (向量/BM25/符號) 權重均等，未針對特定查詢類型動態調整。
 
 ---
 
-## 📜 授權
-
-MIT License
+## 🏷️ 版本

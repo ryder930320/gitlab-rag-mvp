@@ -86,7 +86,13 @@ def query_gitlab_context(question: str, top_k: int = 5, use_hybrid: bool = True)
                 "language": str,
                 "chunk_index": int,
                 "created_at": str,
-                "score": float
+                "score": float,
+                "rrf_score": float,
+                "score_vector": float,
+                "score_bm25": float,
+                "vec_rank": int,
+                "bm25_rank": int,
+                "symbol_hits": int,
             },
             ...
         ]
@@ -98,7 +104,7 @@ def query_gitlab_context(question: str, top_k: int = 5, use_hybrid: bool = True)
         # 混合檢索：呼叫 hybrid_search.py
         from hybrid_search import hybrid_search
         raw_results = hybrid_search(question, top_k=top_k)
-        # 統一輸出格式（只保留原始規定欄位）
+        # 統一輸出格式（保留原始規定欄位 + hybrid 額外欄位供 confidence_evaluator 使用）
         hits = []
         for r in raw_results:
             hits.append({
@@ -108,7 +114,13 @@ def query_gitlab_context(question: str, top_k: int = 5, use_hybrid: bool = True)
                 "language": r.get("language", ""),
                 "chunk_index": r.get("chunk_index", 0),
                 "created_at": r.get("created_at", ""),
-                "score": r["score"]
+                "score": r["score"],  # 這是 rrf_score
+                "rrf_score": r.get("rrf_score", 0.0),
+                "score_vector": r.get("score_vector", 0.0),
+                "score_bm25": r.get("score_bm25", 0.0),
+                "vec_rank": r.get("vec_rank", 999),
+                "bm25_rank": r.get("bm25_rank", 999),
+                "symbol_hits": r.get("symbol_hits", 0),
             })
         return hits
     else:
@@ -141,3 +153,24 @@ if __name__ == "__main__":
     print("\n=== use_hybrid=False (純向量) ===")
     res_vector = query_gitlab_context(test_q, top_k=3, use_hybrid=False)
     print(format_results(res_vector))
+
+
+def get_coding_suggestion(question: str, top_k: int = 5) -> dict:
+    """
+    完整流程：檢索 → 信心評估 → Prompt 建構 → 生成 → 組裝回傳
+    供 Hermes Agent 直接呼叫，取得帶信心等級與來源的程式碼建議
+
+    Args:
+        question: 使用者問題
+        top_k: 檢索前 k 筆
+
+    Returns:
+        {
+            "suggestion": str,
+            "confidence": "high" | "medium" | "low",
+            "confidence_reason": str,
+            "sources": list[dict],  # {"file_path": str, "chunk_index": int, "preview": str}
+        }
+    """
+    from generate_coding_suggestion import generate_coding_suggestion
+    return generate_coding_suggestion(question, top_k=top_k)
