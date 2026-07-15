@@ -1,0 +1,12 @@
+fastapi>=0.104
+uvicorn[standard]>=0.24
+httpx>=0.25
+chromadb>=0.4
+rank-bm25>=0.2
+python-dotenv>=1.0
+pydantic>=2.5
+
+[dev]
+pytest>=7.4
+black>=23.0
+ruff>=0.1

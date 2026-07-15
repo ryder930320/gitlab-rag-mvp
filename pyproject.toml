@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gitlab-rag-mvp"
+version = "0.1.0"
+description = "GitLab RAG Coding Assistant - Hybrid Search + NIM Generation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.104",
+    "uvicorn[standard]>=0.24",
+    "httpx>=0.25",
+    "chromadb>=0.4",
+    "rank-bm25>=0.2",
+    "python-dotenv>=1.0",
+    "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "black>=23.0", "ruff>=0.1"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["gitlab_rag*"]
+
+[tool.setuptools.package-dir]
+"" = "src"
