@@ -6,6 +6,7 @@ import threading
 from collections import deque
 from dotenv import load_dotenv
 import chromadb
+import pickle
 
 load_dotenv()
 
@@ -89,14 +90,22 @@ def main():
     if not NIM_API_KEY or not NIM_EMBED_MODEL:
         raise RuntimeError("請先設定 .env 中的 NIM_API_KEY 和 NIM_EMBED_MODEL")
 
-    # 讀取 chunks
-    with open(CHUNKS_PATH, "r", encoding="utf-8") as f:
-        chunks = json.load(f)
+    # 讀取 chunks (從 BM25 索引載入，已包含 symbols 和 symbol_tokens)
+    with open("data/bm25_index.pkl", "rb") as f:
+        index_data = pickle.load(f)
+    chunks = index_data["chunks"]
 
     print(f"讀取 {len(chunks)} 個 chunks")
 
     # 初始化 Chroma
     client = chromadb.PersistentClient(path=CHROMA_DIR)
+    collection = client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"}
+    )
+
+    # 刪除現有 collection 並重建（確保 metadata 更新）
+    client.delete_collection(name=COLLECTION_NAME)
     collection = client.get_or_create_collection(
         name=COLLECTION_NAME,
         metadata={"hnsw:space": "cosine"}
@@ -124,13 +133,24 @@ def main():
 
         ids.append(str(meta["global_chunk_id"]))
         documents.append(content)
-        metadatas.append({
+        
+        # 只為 code 類型添加 symbols 和 symbol_tokens
+        meta_entry = {
             "source_type": meta["source_type"],
             "file_path": meta.get("file_path") or "",
             "language": meta.get("language") or "",
             "chunk_index": meta["chunk_index"],
-            "created_at": meta.get("created_at") or ""
-        })
+            "created_at": meta.get("created_at") or "",
+        }
+        if meta.get("source_type") == "code":
+            symbols = meta.get("symbols", [])
+            symbol_tokens = meta.get("symbol_tokens", [])
+            if symbols:
+                meta_entry["symbols"] = symbols
+            if symbol_tokens:
+                meta_entry["symbol_tokens"] = symbol_tokens
+                
+        metadatas.append(meta_entry)
         embeddings.append(embedding)
 
         # 速率限制已由 RateLimiter 處理，移除固定 sleep

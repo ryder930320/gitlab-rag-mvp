@@ -97,7 +97,7 @@ def query_gitlab_context(question: str, top_k: int = 5, use_hybrid: bool = True)
     if use_hybrid:
         # 混合檢索：呼叫 hybrid_search.py
         from hybrid_search import hybrid_search
-        raw_results = hybrid_search(question, top_k=top_k, alpha=0.5)
+        raw_results = hybrid_search(question, top_k=top_k)
         # 統一輸出格式（只保留原始規定欄位）
         hits = []
         for r in raw_results:

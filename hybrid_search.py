@@ -1,4 +1,9 @@
-"""混合檢索融合邏輯 (CP-9) - 修正版：加入查詢擴展與字符級 BM25"""
+"""
+混合檢索融合邏輯 (CP-13 RRF 版本)
+- 取代原本的 weighted score fusion
+- 改用 Reciprocal Rank Fusion (RRF)：只比較排名、不比較分數
+- 符號匹配 (CP-12) 作為第三條排序清單餵入 RRF
+"""
 import json
 import pickle
 import re
@@ -19,57 +24,8 @@ CHROMA_DIR = "chroma_db"
 COLLECTION_NAME = "gitlab_rag"
 BM25_INDEX_PATH = "data/bm25_index.pkl"
 
-
-# ========== 查詢擴展：中文關鍵字 → 英文符號/關鍵字 ==========
-# ⚠️ WORKAROUND (MVP 階段限定): 此為手動硬編碼的中英對照表，
-# 僅涵蓋目前測試題涉及的詞彙，不具跨 repo / 跨領域泛化能力。
-# CP-10 回歸測試的 5/5 通過結果是在此字典輔助下取得，
-# 不代表混合檢索方法本身已解決中英語意落差問題。
-# 下一輪迭代應以「符號自動映射」或「embedding-based query expansion」取代。
-QUERY_EXPANSION = {
-    # 推論相關
-    "推論": ["infer", "inference", "infer_base", "AI_Core", "Infer"],
-    "引擎": ["engine", "infer", "inference", "openvino", "Core"],
-    "裝置": ["device", "AUTO", "CPU", "GPU", "available_devices"],
-    "設定": ["config", "setting", "device", "infer_device", "Model_Dir"],
-
-    # 打包相關
-    "建立": ["build", "setup", "create", "bdist_wheel", "build_ext"],
-    "安裝包": ["wheel", "whl", "package", "dist", "bdist_wheel"],
-    "打包": ["build", "setup", "cython", "cythonize", "pyd"],
-
-    # GPIO
-    "GPIO": ["gpio", "DIO", "EApiGPIO", "device_controll", "pin", "set_dio_status"],
-    "控制": ["control", "controll", "set", "get", "status", "high", "low"],
-
-    # 危險區域
-    "危險區域": ["hazard", "hazard_analysis", "danger", "zone", "polygon", "region"],
-    "偵測": ["detect", "detection", "analysis_obj", "disting_obj"],
-
-    # 一般
-    "專案": ["project", "Aaeon_ai_sdk", "setup.py"],
-    "如何": ["how", "run", "execute", "python"],
-    "步驟": ["step", "run", "build", "install"],
-}
-
-
-def expand_query(query: str) -> str:
-    """將查詢擴展：加入對應的英文關鍵字"""
-    expanded_terms = [query]
-    query_lower = query.lower()
-
-    for zh_term, en_terms in QUERY_EXPANSION.items():
-        if zh_term in query:
-            expanded_terms.extend(en_terms)
-
-    # 去重並合併
-    seen = set()
-    result = []
-    for term in expanded_terms:
-        if term not in seen:
-            seen.add(term)
-            result.append(term)
-    return " ".join(result)
+# RRF 參數
+RRF_K = 60  # 業界慣用預設值
 
 
 def _embed_query(text: str) -> List[float]:
@@ -96,37 +52,9 @@ def _load_bm25_index() -> Dict[str, Any]:
         return pickle.load(f)
 
 
-def _min_max_normalize(scores: List[float]) -> List[float]:
-    """將分數 min-max 正規化到 0~1
-    ⚠️ MVP 簡化實作: 使用當下候選池的 min-max (batch-dependent)。
-    資料量增大時會導致分數尺度漂移,未來應改用:
-      - 固定分位數 (P5/P95) 正規化
-      - 或 log-scaling + clip 到固定區間
-    """
-    if not scores:
-        return []
-    min_s, max_s = min(scores), max(scores)
-    if max_s == min_s:
-        return [0.5] * len(scores)
-    return [(s - min_s) / (max_s - min_s) for s in scores]
-
-
-def _symbol_bonus(query: str, symbols: List[str]) -> float:
-    """查詢與 symbols 字串匹配時加分"""
-    if not symbols:
-        return 0.0
-    query_lower = query.lower()
-    for sym in symbols:
-        sym_lower = sym.lower()
-        if sym_lower in query_lower or query_lower in sym_lower:
-            return 0.2
-    return 0.0
-
-
 def _char_ngrams(text: str, n: int = 3) -> List[str]:
     """字符級 n-gram tokenizer（適用於跨語言匹配）"""
     text = text.lower()
-    # 移除空白
     text = re.sub(r"\s+", "", text)
     if len(text) < n:
         return [text]
@@ -147,12 +75,10 @@ class CharNGramBM25:
         self._initialize()
 
     def _initialize(self):
-        # 計算 document frequency
         df = {}
         for doc in self.corpus:
             for word in set(doc):
                 df[word] = df.get(word, 0) + 1
-        # 計算 IDF
         for word, freq in df.items():
             self.idf[word] = max(0.0, (self.corpus_size - freq + 0.5) / (freq + 0.5))
 
@@ -173,7 +99,6 @@ class CharNGramBM25:
 
 def _build_char_ngram_bm25(chunks: List[Dict]) -> CharNGramBM25:
     """為所有 chunks 建立字符級 n-gram BM25"""
-    # 為每個 chunk 建立 corpus 文檔（內容 + symbols + file_path）
     corpus = []
     for chunk in chunks:
         content = chunk["content"]
@@ -181,46 +106,86 @@ def _build_char_ngram_bm25(chunks: List[Dict]) -> CharNGramBM25:
         symbols = " ".join(meta.get("symbols", []))
         file_path = meta.get("file_path", "")
         fname = Path(file_path).stem if file_path else ""
-        # 合併所有文字
         full_text = f"{content} {symbols} {fname}"
-        # 字符級 n-gram
         tokens = _char_ngrams(full_text, n=3)
         corpus.append(tokens)
 
     return CharNGramBM25(corpus)
 
 
+def _reciprocal_rank_fusion(ranked_lists: List[List[str]], k: int = RRF_K) -> Dict[str, float]:
+    """
+    Reciprocal Rank Fusion
+    
+    Args:
+        ranked_lists: 多個已排序的 chunk_id 清單（每個清單按相關性由高到低）
+        k: RRF 常數，預設 60
+    
+    Returns:
+        {chunk_id: rrf_score}
+    """
+    scores = {}
+    for ranked in ranked_lists:
+        for rank, chunk_id in enumerate(ranked, start=1):
+            scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (k + rank)
+    return scores
+
+
+def _get_symbol_ranked_list(question: str, chunks: List[Dict]) -> List[str]:
+    """
+    根據符號匹配產生排序清單
+    命中 symbol_token 的 chunk 被視為相關，按 symbol_token 數量排序
+    """
+    from symbol_expansion import extract_symbol_tokens, symbol_token_bonus
+    
+    # 計算每個 chunk 的符號匹配分數
+    chunk_scores = []
+    for chunk in chunks:
+        meta = chunk["metadata"]
+        if meta.get("source_type") != "code":
+            continue
+        symbols = meta.get("symbols", [])
+        if not symbols:
+            continue
+        stokens = extract_symbol_tokens(symbols)
+        bonus = symbol_token_bonus(question, set(stokens))
+        if bonus > 0:
+            # 用命中的 token 數量作為排序依據
+            hit_count = len(set(re.findall(r'[a-zA-Z]{2,}', question.lower())) & set(stokens))
+            chunk_scores.append((hit_count, meta.get("global_chunk_id", 0)))
+    
+    # 按 hit_count 降序排序
+    chunk_scores.sort(key=lambda x: x[0], reverse=True)
+    return [str(cid) for _, cid in chunk_scores]
+
+
 def hybrid_search(
     question: str,
-    top_k: int = 5,
-    alpha: float = 0.5
+    top_k: int = 5
 ) -> List[Dict[str, Any]]:
     """
-    混合檢索：向量 + 字符級 BM25 + 符號加分
-
+    混合檢索：向量 + 字符級 BM25 + 符號匹配 → RRF 融合
+    
     Args:
         question: 查詢字串
         top_k: 回傳前 k 筆
-        alpha: 向量分數權重 (0~1)，(1-alpha) 為 BM25 權重
-
+    
     Returns:
-        list[dict]: 含 content, file_path, source_type, score, score_vector, score_bm25, ...
+        list[dict]: 含 content, file_path, source_type, score, score_vector, score_bm25, rrf_score, symbol_hits, ...
     """
     # 1. 載入資料
     index_data = _load_bm25_index()
     chunks = index_data["chunks"]
 
-    # 建立字符級 BM25（每次查詢時建立，資料量小可接受；大量時可預建並序列化）
+    # 建立字符級 BM25
     bm25 = _build_char_ngram_bm25(chunks)
 
-    # 2. 查詢擴展
-    expanded_query = expand_query(question)
-    query_tokens = _char_ngrams(expanded_query, n=3)
-
-    # 3. 向量檢索：取 top_k*3 候選
+    # 2. 查詢
+    query_tokens = _char_ngrams(question, n=3)
     candidate_k = top_k * 3
-    query_embedding = _embed_query(question)  # 向量用原始查詢（語意更好）
+    query_embedding = _embed_query(question)
 
+    # 3. 向量檢索
     client = chromadb.PersistentClient(path=CHROMA_DIR)
     collection = client.get_collection(COLLECTION_NAME)
 
@@ -230,11 +195,14 @@ def hybrid_search(
         include=["documents", "metadatas", "distances"]
     )
 
-    vec_candidates = []
+    vec_ranked = []
+    vec_candidates = {}
     for i in range(len(vec_results["ids"][0])):
         meta = vec_results["metadatas"][0][i]
-        vec_candidates.append({
-            "chunk_id": vec_results["ids"][0][i],
+        cid = str(vec_results["ids"][0][i])
+        vec_ranked.append(cid)
+        vec_candidates[cid] = {
+            "chunk_id": cid,
             "content": vec_results["documents"][0][i],
             "file_path": meta.get("file_path", ""),
             "source_type": meta.get("source_type", ""),
@@ -242,19 +210,23 @@ def hybrid_search(
             "chunk_index": meta.get("chunk_index", 0),
             "created_at": meta.get("created_at", ""),
             "score_vector": 1.0 - vec_results["distances"][0][i],
-            "symbols": meta.get("symbols", [])
-        })
+            "symbols": meta.get("symbols", []),
+            "vec_rank": i + 1
+        }
 
-    # 4. 字符級 BM25 檢索
+    # 4. BM25 檢索
     bm25_scores = bm25.get_scores(query_tokens)
     bm25_top_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:candidate_k]
 
-    bm25_candidates = []
-    for idx in bm25_top_indices:
+    bm25_ranked = []
+    bm25_candidates = {}
+    for rank, idx in enumerate(bm25_top_indices, start=1):
         chunk = chunks[idx]
         meta = chunk["metadata"]
-        bm25_candidates.append({
-            "chunk_id": meta.get("global_chunk_id", idx),
+        cid = str(meta.get("global_chunk_id", idx))
+        bm25_ranked.append(cid)
+        bm25_candidates[cid] = {
+            "chunk_id": cid,
             "content": chunk["content"],
             "file_path": meta.get("file_path", ""),
             "source_type": meta.get("source_type", ""),
@@ -262,53 +234,46 @@ def hybrid_search(
             "chunk_index": meta.get("chunk_index", 0),
             "created_at": meta.get("created_at", ""),
             "score_bm25": bm25_scores[idx],
-            "symbols": meta.get("symbols", [])
-        })
+            "symbols": meta.get("symbols", []),
+            "bm25_rank": rank
+        }
 
-    # 5. 合併候選（用 chunk_id 去重）
+    # 5. 符號匹配排序清單
+    symbol_ranked = _get_symbol_ranked_list(question, chunks)
+
+    # 6. RRF 融合
+    ranked_lists = [vec_ranked, bm25_ranked, symbol_ranked]
+    rrf_scores = _reciprocal_rank_fusion(ranked_lists, RRF_K)
+
+    # 7. 合併所有候選並按 RRF 分數排序
     all_candidates = {}
-    for c in vec_candidates:
-        cid = str(c["chunk_id"])
-        if cid not in all_candidates:
-            all_candidates[cid] = c
+    for cid, cand in vec_candidates.items():
+        all_candidates[cid] = cand
+    for cid, cand in bm25_candidates.items():
+        if cid in all_candidates:
+            # 合併資訊
+            all_candidates[cid]["score_bm25"] = cand["score_bm25"]
+            all_candidates[cid]["bm25_rank"] = cand["bm25_rank"]
         else:
-            all_candidates[cid]["score_vector"] = max(all_candidates[cid]["score_vector"], c["score_vector"])
+            all_candidates[cid] = cand
 
-    for c in bm25_candidates:
-        cid = str(c["chunk_id"])
-        if cid not in all_candidates:
-            all_candidates[cid] = c
-            all_candidates[cid]["score_vector"] = 0.0
+    # 加上 RRF 分數和排序資訊
+    for cid, cand in all_candidates.items():
+        cand["rrf_score"] = rrf_scores.get(cid, 0.0)
+        cand["vec_rank"] = cand.get("vec_rank", 999)
+        cand["bm25_rank"] = cand.get("bm25_rank", 999)
+        # 符號命中數
+        symbols = cand.get("symbols", [])
+        if symbols:
+            from symbol_expansion import extract_symbol_tokens, symbol_token_bonus
+            stokens = extract_symbol_tokens(symbols)
+            cand["symbol_hits"] = len(set(re.findall(r'[a-zA-Z]{2,}', question.lower())) & set(stokens))
         else:
-            all_candidates[cid]["score_bm25"] = c["score_bm25"]
+            cand["symbol_hits"] = 0
 
-    # 確保所有候選都有兩個分數
-    for c in all_candidates.values():
-        c.setdefault("score_vector", 0.0)
-        c.setdefault("score_bm25", 0.0)
-
-    # 6. 計算分項分數正規化 + 符號加分
-    cand_list = list(all_candidates.values())
-
-    vec_scores = [c["score_vector"] for c in cand_list]
-    bm25_scores_list = [c["score_bm25"] for c in cand_list]
-
-    norm_vec = _min_max_normalize(vec_scores)
-    norm_bm25 = _min_max_normalize(bm25_scores_list)
-
-    for i, c in enumerate(cand_list):
-        c["norm_score_vector"] = norm_vec[i]
-        c["norm_score_bm25"] = norm_bm25[i]
-        c["symbol_bonus"] = _symbol_bonus(question, c.get("symbols", []))
-        c["final_score"] = (
-            alpha * c["norm_score_vector"]
-            + (1 - alpha) * c["norm_score_bm25"]
-            + c["symbol_bonus"]
-        )
-
-    # 7. 排序並回傳 top_k
-    cand_list.sort(key=lambda x: x["final_score"], reverse=True)
-    results = cand_list[:top_k]
+    # 8. 排序並回傳 top_k
+    sorted_candidates = sorted(all_candidates.values(), key=lambda x: x["rrf_score"], reverse=True)
+    results = sorted_candidates[:top_k]
 
     # 格式化輸出
     output = []
@@ -320,19 +285,19 @@ def hybrid_search(
             "language": r.get("language", ""),
             "chunk_index": r.get("chunk_index", 0),
             "created_at": r.get("created_at", ""),
-            "score": r["final_score"],
-            "score_vector": r["score_vector"],
-            "score_bm25": r["score_bm25"],
-            "norm_score_vector": r.get("norm_score_vector", 0),
-            "norm_score_bm25": r.get("norm_score_bm25", 0),
-            "symbol_bonus": r.get("symbol_bonus", 0),
+            "score": r["rrf_score"],
+            "score_vector": r.get("score_vector", 0.0),
+            "score_bm25": r.get("score_bm25", 0.0),
+            "rrf_score": r["rrf_score"],
+            "vec_rank": r.get("vec_rank", 999),
+            "bm25_rank": r.get("bm25_rank", 999),
+            "symbol_hits": r.get("symbol_hits", 0),
         })
 
     return output
 
 
 if __name__ == "__main__":
-    # 測試兩個 CP-6 失準的問題
     test_questions = [
         "專案使用什麼推論引擎？怎麼設定裝置？",
         "如何建立 whl 安裝包？",
@@ -342,9 +307,9 @@ if __name__ == "__main__":
         print(f"\n{'='*60}")
         print(f"查詢: {q}")
         print(f"{'='*60}")
-        results = hybrid_search(q, top_k=3, alpha=0.5)
+        results = hybrid_search(q, top_k=5)
         for i, r in enumerate(results, 1):
-            print(f"\n  Top-{i}: final={r['score']:.4f} | vec={r['score_vector']:.4f}(norm={r['norm_score_vector']:.4f}) | bm25={r['score_bm25']:.4f}(norm={r['norm_score_bm25']:.4f}) | bonus={r['symbol_bonus']:.2f}")
+            print(f"\n  Top-{i}: rrf={r['rrf_score']:.4f} | vec={r['score_vector']:.4f}(rank={r['vec_rank']}) | bm25={r['score_bm25']:.4f}(rank={r['bm25_rank']}) | symbol_hits={r['symbol_hits']}")
             print(f"         file={r['file_path']} | type={r['source_type']} | chunk#{r['chunk_index']}")
             preview = r['content'][:120].replace('\n', ' ')
             print(f"         content: {preview}...")
