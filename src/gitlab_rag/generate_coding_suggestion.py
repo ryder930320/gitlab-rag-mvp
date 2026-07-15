@@ -24,9 +24,9 @@ NIM_API_KEY = os.getenv("NIM_API_KEY")
 NIM_GENERATE_MODEL = os.getenv("NIM_GENERATE_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
 NIM_GENERATE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
-from rag_interface import query_gitlab_context
-from confidence_evaluator import evaluate_confidence
-from prompt_builder import build_prompt
+from .rag_interface import query_gitlab_context
+from .confidence_evaluator import evaluate_confidence
+from .prompt_builder import build_prompt
 
 
 def call_nim_generate(prompt: str, timeout: float = 60.0) -> str:

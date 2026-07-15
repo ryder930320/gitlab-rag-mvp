@@ -102,7 +102,7 @@ def query_gitlab_context(question: str, top_k: int = 5, use_hybrid: bool = True)
 
     if use_hybrid:
         # 混合檢索：呼叫 hybrid_search.py
-        from hybrid_search import hybrid_search
+        from .hybrid_search import hybrid_search
         raw_results = hybrid_search(question, top_k=top_k)
         # 統一輸出格式（保留原始規定欄位 + hybrid 額外欄位供 confidence_evaluator 使用）
         hits = []
@@ -172,5 +172,5 @@ def get_coding_suggestion(question: str, top_k: int = 5) -> dict:
             "sources": list[dict],  # {"file_path": str, "chunk_index": int, "preview": str}
         }
     """
-    from generate_coding_suggestion import generate_coding_suggestion
+    from .generate_coding_suggestion import generate_coding_suggestion
     return generate_coding_suggestion(question, top_k=top_k)

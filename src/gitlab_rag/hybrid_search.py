@@ -136,7 +136,7 @@ def _get_symbol_ranked_list(question: str, chunks: List[Dict]) -> List[str]:
     根據符號匹配產生排序清單
     命中 symbol_token 的 chunk 被視為相關，按 symbol_token 數量排序
     """
-    from symbol_expansion import extract_symbol_tokens, symbol_token_bonus
+    from .symbol_expansion import extract_symbol_tokens, symbol_token_bonus
     
     # 計算每個 chunk 的符號匹配分數
     chunk_scores = []
@@ -265,7 +265,7 @@ def hybrid_search(
         # 符號命中數
         symbols = cand.get("symbols", [])
         if symbols:
-            from symbol_expansion import extract_symbol_tokens, symbol_token_bonus
+            from .symbol_expansion import extract_symbol_tokens, symbol_token_bonus
             stokens = extract_symbol_tokens(symbols)
             cand["symbol_hits"] = len(set(re.findall(r'[a-zA-Z]{2,}', question.lower())) & set(stokens))
         else:

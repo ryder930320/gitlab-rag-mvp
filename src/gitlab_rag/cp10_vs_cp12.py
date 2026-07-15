@@ -14,8 +14,8 @@ CHROMA_DIR = 'chroma_db'
 COLLECTION_NAME = 'gitlab_rag'
 
 sys.path.insert(0, 'C:/Users/YuchiPan/hermes-workspace/gitlab-rag-mvp')
-from hybrid_search import _load_bm25_index, _min_max_normalize, _char_ngrams, _build_char_ngram_bm25
-from symbol_expansion import extract_symbol_tokens, symbol_token_bonus
+from .hybrid_search import _load_bm25_index, _min_max_normalize, _char_ngrams, _build_char_ngram_bm25
+from .symbol_expansion import extract_symbol_tokens, symbol_token_bonus
 
 # CP-10 的 QUERY_EXPANSION 字典
 QUERY_EXPANSION = {
@@ -166,7 +166,7 @@ def hybrid_search_cp10(question: str, top_k: int = 5, alpha: float = 0.5):
     return output
 
 # CP-12 版本
-from hybrid_search import hybrid_search
+from .hybrid_search import hybrid_search
 
 # 執行對比
 test_questions = [

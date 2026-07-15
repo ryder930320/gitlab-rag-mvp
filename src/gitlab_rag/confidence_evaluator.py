@@ -79,7 +79,7 @@ def evaluate_confidence(retrieved_chunks: List[Dict[str, Any]]) -> Dict[str, str
 
 
 if __name__ == "__main__":
-    from hybrid_search import hybrid_search
+    from .hybrid_search import hybrid_search
 
     # 測試題目（CP-15 已知會失準的 + 穩定答對的 + 其他）
     test_questions = [

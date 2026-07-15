@@ -61,7 +61,7 @@ def build_prompt(question: str, retrieved_chunks: List[Dict], max_context_chars:
 
 if __name__ == "__main__":
     # 簡單測試
-    from hybrid_search import hybrid_search
+    from .hybrid_search import hybrid_search
 
     test_questions = [
         "如何建立 whl 安裝包？",
