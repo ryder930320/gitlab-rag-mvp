@@ -1,4 +1,4 @@
-"""GitLab RAG 查詢介面 - 供 Hermes Agent 呼叫"""
+"""GitLab RAG 查詢介面 - 供 Hermes Agent 呼叫 (MVP 版本：純向量檢索)"""
 import os
 import httpx
 import chromadb
@@ -44,38 +44,13 @@ def _embed_query(text: str) -> list[float]:
         return resp.json()["data"][0]["embedding"]
 
 
-def _vector_search(question: str, top_k: int) -> list[dict]:
-    """純向量檢索（CP-7 原始邏輯）"""
-    query_embedding = _embed_query(question)
-    collection = _get_collection()
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=top_k,
-        include=["documents", "metadatas", "distances"]
-    )
-    hits = []
-    for i in range(len(results["ids"][0])):
-        meta = results["metadatas"][0][i]
-        hits.append({
-            "content": results["documents"][0][i],
-            "file_path": meta.get("file_path", ""),
-            "source_type": meta.get("source_type", ""),
-            "language": meta.get("language", ""),
-            "chunk_index": meta.get("chunk_index", 0),
-            "created_at": meta.get("created_at", ""),
-            "score": 1.0 - results["distances"][0][i]
-        })
-    return hits
-
-
-def query_gitlab_context(question: str, top_k: int = 5, use_hybrid: bool = True) -> list[dict]:
+def query_gitlab_context(question: str, top_k: int = 5) -> list[dict]:
     """
-    查詢 GitLab 專案上下文
+    查詢 GitLab 專案上下文 (純向量檢索，MVP 版本)
 
     Args:
         question: 使用者問題
         top_k: 回傳前 k 筆結果
-        use_hybrid: True=混合檢索(向量+BM25+符號), False=純向量檢索(CP-7 邏輯)
 
     Returns:
         list[dict]: [
@@ -94,26 +69,31 @@ def query_gitlab_context(question: str, top_k: int = 5, use_hybrid: bool = True)
     if not NIM_API_KEY or not NIM_EMBED_MODEL:
         raise RuntimeError("請先設定 .env 中的 NIM_API_KEY 和 NIM_EMBED_MODEL")
 
-    if use_hybrid:
-        # 混合檢索：呼叫 hybrid_search.py
-        from hybrid_search import hybrid_search
-        raw_results = hybrid_search(question, top_k=top_k, alpha=0.5)
-        # 統一輸出格式（只保留原始規定欄位）
-        hits = []
-        for r in raw_results:
-            hits.append({
-                "content": r["content"],
-                "file_path": r["file_path"],
-                "source_type": r["source_type"],
-                "language": r.get("language", ""),
-                "chunk_index": r.get("chunk_index", 0),
-                "created_at": r.get("created_at", ""),
-                "score": r["score"]
-            })
-        return hits
-    else:
-        # 純向量檢索：CP-7 原始邏輯
-        return _vector_search(question, top_k)
+    # 1. Embed query
+    query_embedding = _embed_query(question)
+
+    # 2. 檢索 Chroma
+    collection = _get_collection()
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=top_k,
+        include=["documents", "metadatas", "distances"]
+    )
+
+    # 3. 整理輸出
+    hits = []
+    for i in range(len(results["ids"][0])):
+        meta = results["metadatas"][0][i]
+        hits.append({
+            "content": results["documents"][0][i],
+            "file_path": meta.get("file_path", ""),
+            "source_type": meta.get("source_type", ""),
+            "language": meta.get("language", ""),
+            "chunk_index": meta.get("chunk_index", 0),
+            "created_at": meta.get("created_at", ""),
+            "score": 1.0 - results["distances"][0][i]
+        })
+    return hits
 
 
 # 便利函式：格式化輸出供人類閱讀
@@ -130,14 +110,8 @@ def format_results(results: list[dict]) -> str:
 
 
 if __name__ == "__main__":
-    # 簡單測試：兩種模式對照
+    # 簡單測試
     test_q = "這個專案怎麼處理 GPIO 控制？"
     print(f"測試查詢：{test_q}\n")
-
-    print("=== use_hybrid=True (混合檢索) ===")
-    res_hybrid = query_gitlab_context(test_q, top_k=3, use_hybrid=True)
-    print(format_results(res_hybrid))
-
-    print("\n=== use_hybrid=False (純向量) ===")
-    res_vector = query_gitlab_context(test_q, top_k=3, use_hybrid=False)
-    print(format_results(res_vector))
+    res = query_gitlab_context(test_q, top_k=3)
+    print(format_results(res))

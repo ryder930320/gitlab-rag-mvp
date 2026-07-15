@@ -2,4 +2,3 @@ python-gitlab
 chromadb
 httpx
 python-dotenv
-rank-bm25
