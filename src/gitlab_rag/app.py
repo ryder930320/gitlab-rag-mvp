@@ -3,7 +3,7 @@ from fastapi import FastAPI, Query
 from pydantic import BaseModel
 from typing import List, Optional
 
-from .rag_interface import query_gitlab_context, format_results, get_coding_suggestion
+from gitlab_rag.rag_interface import query_gitlab_context, format_results, get_coding_suggestion
 
 app = FastAPI(title="GitLab RAG MVP", version="0.1.0")
 

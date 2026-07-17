@@ -15,6 +15,7 @@
 """
 import os
 import httpx
+import time
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
@@ -27,6 +28,7 @@ NIM_GENERATE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 from .rag_interface import query_gitlab_context
 from .confidence_evaluator import evaluate_confidence
 from .prompt_builder import build_prompt
+from .nim_logger import log_nim_call
 
 
 def call_nim_generate(prompt: str, timeout: float = 60.0) -> str:
@@ -60,22 +62,49 @@ def call_nim_generate(prompt: str, timeout: float = 60.0) -> str:
         "stream": False,
     }
 
+    start = time.time()
+    error_msg = None
+    response_json = None
+    status_code = 0
+    finish_reason = None
+
     try:
         with httpx.Client(timeout=timeout) as client:
             resp = client.post(NIM_GENERATE_URL, headers=headers, json=payload)
+            latency_ms = int((time.time() - start) * 1000)
+            status_code = resp.status_code
             if resp.status_code == 402:
                 raise RuntimeError("NIM API 額度用盡或帳單問題 (HTTP 402)")
             if resp.status_code == 429:
                 raise RuntimeError("NIM API 速率限制 (HTTP 429)，請稍後再試")
             resp.raise_for_status()
             data = resp.json()
+            response_json = data
+            finish_reason = data["choices"][0].get("finish_reason")
             return data["choices"][0]["message"]["content"].strip()
     except httpx.TimeoutException:
+        latency_ms = int((time.time() - start) * 1000)
         raise RuntimeError(f"NIM API 請求逾時 ({timeout} 秒)")
     except httpx.HTTPStatusError as e:
+        latency_ms = int((time.time() - start) * 1000)
+        status_code = e.response.status_code
         raise RuntimeError(f"NIM API HTTP 錯誤: {e.response.status_code} - {e.response.text}")
     except Exception as e:
+        latency_ms = int((time.time() - start) * 1000)
         raise RuntimeError(f"NIM API 呼叫失敗: {e}")
+    finally:
+        log_nim_call(
+            query=prompt[:200] + "..." if len(prompt) > 200 else prompt,
+            model=NIM_GENERATE_MODEL,
+            call_type="generate",
+            request_payload=payload,
+            response_payload=response_json,
+            finish_reason=finish_reason,
+            fallback_triggered=False,
+            latency_ms=latency_ms,
+            error=error_msg,
+            status_code=status_code,
+        )
 
 
 def generate_coding_suggestion(question: str, top_k: int = 5) -> Dict[str, Any]:

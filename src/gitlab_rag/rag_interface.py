@@ -114,8 +114,10 @@ def query_gitlab_context(question: str, top_k: int = 5, use_hybrid: bool = True)
                 "language": r.get("language", ""),
                 "chunk_index": r.get("chunk_index", 0),
                 "created_at": r.get("created_at", ""),
-                "score": r["score"],  # 這是 rrf_score
+                "score": r["score"],  # 這是 rrf_score 或 rerank_score
                 "rrf_score": r.get("rrf_score", 0.0),
+                "rerank_score": r.get("rerank_score"),
+                "rerank_rank": r.get("rerank_rank"),
                 "score_vector": r.get("score_vector", 0.0),
                 "score_bm25": r.get("score_bm25", 0.0),
                 "vec_rank": r.get("vec_rank", 999),

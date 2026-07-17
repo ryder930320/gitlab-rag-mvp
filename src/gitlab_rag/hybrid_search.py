@@ -1,12 +1,14 @@
-"""
-混合檢索融合邏輯 (CP-13 RRF 版本)
+"""混合檢索融合邏輯 (CP-13 RRF 版本 + CP-23 Query Expansion + CP-24 Reranker)
 - 取代原本的 weighted score fusion
 - 改用 Reciprocal Rank Fusion (RRF)：只比較排名、不比較分數
 - 符號匹配 (CP-12) 作為第三條排序清單餵入 RRF
+- 查詢擴展 (CP-23)：純中文查詢經 LLM 擴展英文技術詞彙，僅餵給 BM25/符號路徑
+- Reranker (CP-24)：RRF 融合後使用 NIM 生成模型重排序
 """
 import json
 import pickle
 import re
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import chromadb
@@ -22,13 +24,21 @@ NIM_EMBED_URL = "https://integrate.api.nvidia.com/v1/embeddings"
 
 CHROMA_DIR = "chroma_db"
 COLLECTION_NAME = "gitlab_rag"
-BM25_INDEX_PATH = "data/bm25_index.pkl"
+# 使用相對於專案根目錄的絕對路徑
+BASE_DIR = Path(__file__).resolve().parents[2]
+BM25_INDEX_PATH = str(BASE_DIR / "data" / "bm25_index.pkl")
 
 # RRF 參數
 RRF_K = 60  # 業界慣用預設值
 
+# Reranker 開關（可用環境變數關閉）
+RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "true").lower() == "true"
 
-def _embed_query(text: str) -> List[float]:
+# 匯入 logger
+from .nim_logger import log_nim_call
+
+
+def _embed_query(text: str, question: str = "") -> List[float]:
     """將查詢文字轉為向量 (input_type=query)"""
     headers = {
         "Authorization": f"Bearer {NIM_API_KEY}",
@@ -40,10 +50,39 @@ def _embed_query(text: str) -> List[float]:
         "encoding_format": "float",
         "input_type": "query"
     }
-    with httpx.Client(timeout=60.0) as client:
-        resp = client.post(NIM_EMBED_URL, headers=headers, json=payload)
-        resp.raise_for_status()
-        return resp.json()["data"][0]["embedding"]
+    start = time.time()
+    fallback = False
+    error_msg = None
+    response_json = None
+    status_code = 200
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            resp = client.post(NIM_EMBED_URL, headers=headers, json=payload)
+            latency_ms = int((time.time() - start) * 1000)
+            status_code = resp.status_code
+            resp.raise_for_status()
+            response_json = resp.json()
+            return response_json["data"][0]["embedding"]
+    except Exception as e:
+        latency_ms = int((time.time() - start) * 1000)
+        error_msg = str(e)
+        status_code = getattr(e, 'response', None)
+        status_code = status_code.status_code if status_code else 0
+        fallback = False
+        raise
+    finally:
+        log_nim_call(
+            query=question or text,
+            model=NIM_EMBED_MODEL,
+            call_type="embedding",
+            request_payload=payload,
+            response_payload=response_json,
+            finish_reason=None,
+            fallback_triggered=fallback,
+            error=error_msg,
+            latency_ms=latency_ms,
+            status_code=status_code,
+        )
 
 
 def _load_bm25_index() -> Dict[str, Any]:
@@ -180,10 +219,17 @@ def hybrid_search(
     # 建立字符級 BM25
     bm25 = _build_char_ngram_bm25(chunks)
 
-    # 2. 查詢
-    query_tokens = _char_ngrams(question, n=3)
-    candidate_k = top_k * 3
+    # 2. 查詢擴展 (CP-23)：純中文查詢擴展英文技術詞彙，僅用於 BM25/符號路徑
+    from .query_expander import expand_chinese_query
+    expansion_result = expand_chinese_query(question)
+    bm25_query = expansion_result["expanded_query_for_bm25"]
+    expanded_terms = expansion_result["expanded_terms"]
+    
+    # 向量檢索使用原始問題
     query_embedding = _embed_query(question)
+    # BM25/符號路徑使用擴展後的查詢
+    query_tokens = _char_ngrams(bm25_query, n=3)
+    candidate_k = top_k * 3
 
     # 3. 向量檢索
     client = chromadb.PersistentClient(path=CHROMA_DIR)
@@ -214,7 +260,7 @@ def hybrid_search(
             "vec_rank": i + 1
         }
 
-    # 4. BM25 檢索
+    # 4. BM25 檢索（使用擴展後的查詢）
     bm25_scores = bm25.get_scores(query_tokens)
     bm25_top_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:candidate_k]
 
@@ -238,8 +284,8 @@ def hybrid_search(
             "bm25_rank": rank
         }
 
-    # 5. 符號匹配排序清單
-    symbol_ranked = _get_symbol_ranked_list(question, chunks)
+    # 5. 符號匹配排序清單（使用擴展後的查詢）
+    symbol_ranked = _get_symbol_ranked_list(bm25_query, chunks)
 
     # 6. RRF 融合
     ranked_lists = [vec_ranked, bm25_ranked, symbol_ranked]
@@ -262,18 +308,23 @@ def hybrid_search(
         cand["rrf_score"] = rrf_scores.get(cid, 0.0)
         cand["vec_rank"] = cand.get("vec_rank", 999)
         cand["bm25_rank"] = cand.get("bm25_rank", 999)
-        # 符號命中數
+        # 符號命中數（使用擴展後查詢計算）
         symbols = cand.get("symbols", [])
         if symbols:
             from .symbol_expansion import extract_symbol_tokens, symbol_token_bonus
             stokens = extract_symbol_tokens(symbols)
-            cand["symbol_hits"] = len(set(re.findall(r'[a-zA-Z]{2,}', question.lower())) & set(stokens))
+            cand["symbol_hits"] = len(set(re.findall(r'[a-zA-Z]{2,}', bm25_query.lower())) & set(stokens))
         else:
             cand["symbol_hits"] = 0
 
     # 8. 排序並回傳 top_k
     sorted_candidates = sorted(all_candidates.values(), key=lambda x: x["rrf_score"], reverse=True)
     results = sorted_candidates[:top_k]
+
+    # 9. Reranker 重排序 (CP-24)：在 hybrid_search 之後、confidence_evaluator 之前
+    if RERANKER_ENABLED:
+        from .reranker import rerank_results
+        results = rerank_results(question, results, top_k=top_k, enabled=RERANKER_ENABLED)
 
     # 格式化輸出
     output = []
@@ -285,13 +336,16 @@ def hybrid_search(
             "language": r.get("language", ""),
             "chunk_index": r.get("chunk_index", 0),
             "created_at": r.get("created_at", ""),
-            "score": r["rrf_score"],
+            "score": r.get("rerank_score", r["rrf_score"]),  # 優先使用 rerank_score，否則回退到 rrf_score
             "score_vector": r.get("score_vector", 0.0),
             "score_bm25": r.get("score_bm25", 0.0),
             "rrf_score": r["rrf_score"],
+            "rerank_score": r.get("rerank_score"),
+            "rerank_rank": r.get("rerank_rank"),
             "vec_rank": r.get("vec_rank", 999),
             "bm25_rank": r.get("bm25_rank", 999),
             "symbol_hits": r.get("symbol_hits", 0),
+            "expanded_terms": expanded_terms,  # 記錄擴展詞彙供除錯
         })
 
     return output
