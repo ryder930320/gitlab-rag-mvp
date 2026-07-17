@@ -11,6 +11,10 @@ python generate_coding_suggestion.py
 
 # 測 HTTP 端點（GET 與 POST 都要跑，含中文與純英文各一組）
 curl -s "http://localhost:8000/suggest?question=<query>&top_k=5"
+
+# POST body 含中文時，一律用檔案傳遞，禁止用 -d '...' 命令列直接夾帶中文
+# （根因：Windows codepage 950 會在 argv 組建階段汙染中文字元，已於 CP-21 確認）
+printf '%s' '{"question": "<中文問題>", "top_k": 5}' > payload.json
 curl -s -X POST "http://localhost:8000/suggest" -H "Content-Type: application/json" --data-binary @payload.json
 
 # 檢查檔案是否真的寫入
@@ -42,6 +46,11 @@ cat ISSUES_LOG.md | tail -30
 **宣稱「已寫入檔案」時，附上寫入後重新讀取的內容，不要用同一份草稿充當兩種狀態。**
 
 **規格要求 GET 和 POST 都測，就是兩個都要過，不能只過一個就把另一個歸類成「已知限制」帶過。**
+
+**POST body 含中文，一律用檔案傳遞（`printf > file` + `--data-binary @file`），禁止用 `-d '...'` 命令列直接傳中文。**
+- 根因（CP-21 已確認，非推測）：Windows codepage 950 與命令列 argv 組建路徑不相容，中文字元在送出前就被錯誤轉碼，可由送出的 `Content-Length` 與純英文版本相同這點直接佐證
+- 檔案傳遞法繞過該路徑，不受 codepage 影響，已實測驗證（`Content-Length` 正確反映 UTF-8 位元組數、回應 200 OK）
+- 這條規則不是「已知限制」，是「已確認根因 + 已驗證解法」，兩者在回報時用詞要分清楚
 
 ## 邊界
 - 不寫死 API 金鑰，一律走 `.env`

@@ -432,6 +432,53 @@ CONST_PATTERN = re.compile(r"(?:^|\n)\s*([A-Z_][A-Z0-9_]*)\s*=")
 
 ---
 
+## 🏁 CP-25 Step 2: Low 信心門檻校準（CP-25 進行中）
+**解決狀態：🔄 進行中 (Step 2 完成，Step 3 待執行)**
+
+### 任務概要
+- CP-25 Step 1：建立黃金測試集（32 題，含 18 題評估案例 8 CP-20 + 10 CP-22 清洗保留），清洗標籤（14 題移除：11 無意義 + 3 重複/超出範圍）
+- CP-25 Step 1：實作 Faithfulness 評估腳本（LLM-as-Judge），跑出 CP-20 8 題基準分數（平均 0.597）
+- CP-25 Step 2：Low 信心門檻校準——基於 312 筆真實 rerank log，設計「連續分數 + 不確定性區間」方案
+
+### 校準結果與誠實基準
+- **最終門檻**：LOW_THRESH=0.15, HIGH_THRESH=0.85, RRF_GAP_THRESH=0.15, MAD_THRESH=0.05
+- **核心邏輯修正**：HIGH 判定**只看 RRF gap > 0.15**，移除 symbol_hits/vec_rank/bm25_rank 的獨立放行條件（修正 5 題誤判 HIGH）
+- **誠實準確率**：13/18 = 72.2%（非透過改標籤取得的虛高數字）
+- **本次 72.2% 跟上一版 72.2% 是不同的錯誤組合，純屬巧合同分**
+
+### Known Issue (CP-25 待後續迭代)
+
+#### 問題 A：GPIO 控制怎麼用？ - RRF gap 極小導致 HIGH→MEDIUM 誤判（信心評估邏輯的已知限制）
+- **查詢**：GPIO 控制怎麼用？
+- **RRF gap**：0.0005
+- **Top-1 / Top-2**：均來自 `device_controll.py`，內容互補（Top-1：`set_dio_status` 高層方法；Top-2：EAPI 底層定義）
+- **根因**：同一檔案多個語意互補片段，RRF 排名幾乎並列，非訊號弱
+- **狀態**：信心評估邏輯的已知限制，未來可加「Top-2 內容互補 / 語意互補度」判斷作為 HIGH 判定的補充條件
+- **優先度**：中（非阻塞，待後續迭代實作互補內容判斷）
+
+#### 問題 B：available devices list - 檢索排序品質問題，非信心閾值問題
+- **查詢**：available devices list
+- **RRF gap**：0.0161
+- **Top-1**：`device_controll.py` (imports 區塊，干擾項)
+- **Top-2**：`infer_base.py`: `available_devices`（正確答案）
+- **根因**：BM25 給錯誤檔案 (`device_controll.py`) 高分，導致 Top-1 為干擾項，Top-2 才是正確答案。RRF gap 小是因為 Top-1/2 分數接近，但實際上 Top-2 才是正確答案
+- **分類**：**檢索排序品質問題**，非信心閾值問題
+- **優先度**：中（需排查 BM25 為什麼誤判 `device_controll.py` 為 Top-1，優先度留給以後排查）
+- **狀態**：待排查，優先度留給以後，不阻塞當前流程
+
+#### 爭議標籤 (cp22_010)
+- 查詢：「專案 設定 怎麼 測試 未知」
+- reranker median = 0.9 (5 runs)，但 golden set 保持 `expected_confidence: "low"`
+- 註記：reranker 看到語意重疊（GPIO setup/test logic、AI_Core init），標籤爭議待真實查詢驗證，不改標籤取悅數字
+
+### 交付檔案
+- `src/gitlab_rag/low_confidence_threshold.py` — 收緊後的門檻邏輯
+- `src/gitlab_rag/confidence_evaluator.py` — 整合新邏輯，保留向後相容
+- `src/gitlab_rag/golden_test_set.json` — cp22_010 爭議標記
+- `CHANGELOG.md` — 記錄收緊邏輯與誠實基準 72.2%
+
+---
+
 ## 🏁 迭代二最終交付總結
 
 | 階段 | 目標 | 結果 |
