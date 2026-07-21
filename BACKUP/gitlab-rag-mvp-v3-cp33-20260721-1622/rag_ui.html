@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GitLab RAG 查詢介面</title>
+<script src="marked.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; line-height: 1.6; color: #1a1a2e; background: #f5f5f7; min-height: 100vh; padding: 20px; }
+  .container { max-width: 900px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.06); overflow: hidden; }
+  header { background: linear-gradient(135deg, #1e3a5f 0%, #2d5a8a 100%); color: #fff; padding: 24px; position: relative; }
+  h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 8px; }
+  .subtitle { font-size: 0.875rem; opacity: 0.85; }
+  .api-config { position: absolute; top: 16px; right: 16px; background: rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 6px; font-size: 0.75rem; display: flex; gap: 8px; align-items: center; }
+  .api-config input { background: rgba(255,255,255,0.9); border: none; border-radius: 4px; padding: 6px 10px; font-family: monospace; font-size: 0.75rem; color: #1a1a2e; min-width: 280px; }
+  .api-config input:focus { outline: none; box-shadow: 0 0 0 2px rgba(255,255,255,0.4); }
+  main { padding: 24px; }
+  .query-form { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+  .query-input { flex: 1; min-width: 280px; padding: 14px 16px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 1rem; font-family: inherit; transition: border-color 0.2s, box-shadow 0.2s; }
+  .query-input:focus { outline: none; border-color: #2d5a8a; box-shadow: 0 0 0 3px rgba(45,90,138,0.15); }
+  .query-input::placeholder { color: #999; }
+  .btn { padding: 14px 28px; background: #2d5a8a; color: #fff; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: background 0.2s, transform 0.1s; white-space: nowrap; }
+  .btn:hover { background: #1e3a5f; }
+  .btn:active { transform: scale(0.98); }
+  .btn:disabled { background: #a0b8d0; cursor: not-allowed; }
+  .btn-secondary { background: #6c757d; }
+  .btn-secondary:hover { background: #5a6268; }
+  .result-section { display: none; }
+  .result-section.visible { display: block; animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .meta-bar { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; padding: 16px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #2d5a8a; }
+  .meta-item { display: flex; flex-direction: column; gap: 4px; }
+  .meta-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: #666; font-weight: 600; }
+  .meta-value { font-size: 0.9rem; font-weight: 500; color: #1a1a2e; }
+  .confidence-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
+  .confidence-high { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+  .confidence-medium { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+  .confidence-low { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+  .confidence-badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; }
+  .confidence-high::before { background: #28a745; }
+  .confidence-medium::before { background: #ffc107; }
+  .confidence-low::before { background: #dc3545; }
+  .reason-text { font-size: 0.85rem; color: #555; font-style: italic; margin-top: 8px; }
+  .suggestion-content { background: #fafafa; border: 1px solid #e8e8e8; border-radius: 8px; padding: 20px; margin-bottom: 24px; min-height: 200px; }
+  .suggestion-content h1, .suggestion-content h2, .suggestion-content h3 { margin: 1.2em 0 0.6em; color: #1e3a5f; font-weight: 600; }
+  .suggestion-content h1 { font-size: 1.5rem; border-bottom: 2px solid #2d5a8a; padding-bottom: 0.3em; }
+  .suggestion-content h2 { font-size: 1.25rem; border-bottom: 1px solid #e0e0e0; padding-bottom: 0.2em; }
+  .suggestion-content h3 { font-size: 1.1rem; }
+  .suggestion-content p { margin: 0.8em 0; }
+  .suggestion-content ul, .suggestion-content ol { margin: 0.8em 0; padding-left: 1.5em; }
+  .suggestion-content li { margin: 0.4em 0; }
+  .suggestion-content code { background: #f0f0f0; padding: 0.2em 0.4em; border-radius: 4px; font-family: "SF Mono", "Fira Code", Consolas, monospace; font-size: 0.9em; color: #c7254e; }
+  .suggestion-content pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; overflow-x: auto; margin: 1em 0; font-family: "SF Mono", "Fira Code", Consolas, monospace; font-size: 0.85rem; line-height: 1.5; }
+  .suggestion-content pre code { background: transparent; padding: 0; color: inherit; font-size: inherit; }
+  .suggestion-content table { width: 100%; border-collapse: collapse; margin: 1em 0; font-size: 0.9rem; }
+  .suggestion-content th, .suggestion-content td { border: 1px solid #e0e0e0; padding: 8px 12px; text-align: left; }
+  .suggestion-content th { background: #f0f4f8; font-weight: 600; color: #1e3a5f; }
+  .suggestion-content tr:nth-child(even) { background: #fafbfc; }
+  .suggestion-content blockquote { border-left: 4px solid #2d5a8a; padding-left: 16px; margin: 1em 0; color: #555; font-style: italic; }
+  .sources-section { border-top: 1px solid #e8e8e8; padding-top: 16px; }
+  .sources-title { font-size: 1rem; font-weight: 600; color: #1a1a2e; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .sources-title::before { content: ""; width: 4px; height: 20px; background: #2d5a8a; border-radius: 2px; }
+  .source-item { border: 1px solid #e8e8e8; border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+  .source-header { background: #f8f9fa; padding: 12px 16px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; transition: background 0.2s; user-select: none; }
+  .source-header:hover { background: #eef2f7; }
+  .source-header:focus { outline: none; box-shadow: inset 0 0 0 2px #2d5a8a; }
+  .source-info { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .source-file { font-family: monospace; font-size: 0.85rem; color: #2d5a8a; font-weight: 500; }
+  .source-chunk { background: #e8edf3; color: #1e3a5f; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 500; }
+  .source-score { color: #666; font-size: 0.8rem; font-family: monospace; }
+  .source-toggle { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; color: #666; transition: transform 0.2s; flex-shrink: 0; }
+  .source-item.open .source-toggle { transform: rotate(180deg); }
+  .source-content { max-height: 0; overflow: hidden; transition: max-height 0.3s ease, padding 0.3s ease; background: #fff; }
+  .source-item.open .source-content { max-height: 500px; padding: 16px; }
+  .source-preview { font-size: 0.85rem; line-height: 1.6; color: #444; background: #fafafa; padding: 12px; border-radius: 6px; border: 1px solid #eee; white-space: pre-wrap; font-family: inherit; }
+  .loading { display: none; text-align: center; padding: 40px; color: #666; }
+  .loading.visible { display: block; }
+  .spinner { width: 36px; height: 36px; border: 3px solid #e0e0e0; border-top-color: #2d5a8a; border-radius: 50%; margin: 0 auto 16px; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; padding: 16px; border-radius: 8px; margin-bottom: 16px; display: none; }
+  .error.visible { display: block; }
+  .footer { text-align: center; padding: 16px; color: #888; font-size: 0.75rem; border-top: 1px solid #eee; }
+  
+  /* SSE 階段進度條 */
+  .stage-progress { margin: 16px 0; padding: 12px 16px; background: #f0f4f8; border-radius: 8px; border: 1px solid #d0d8e8; }
+  .stage-progress.hidden { display: none; }
+  .stage-bar { height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden; margin-bottom: 8px; }
+  .stage-bar-fill { height: 100%; background: linear-gradient(90deg, #2d5a8a, #4a90d9); border-radius: 3px; transition: width 0.3s ease; width: 0%; }
+  .stage-info { display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; color: #333; }
+  .stage-message { font-weight: 500; }
+  .stage-percent { color: #666; font-family: monospace; font-size: 0.8rem; }
+  
+  /* Token 串流顯示 */
+  .streaming-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #2d5a8a; animation: pulse 1s infinite; margin-left: 4px; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  
+  /* Timing 顯示 */
+  .timing-panel { margin-top: 20px; padding: 16px; background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 8px; }
+  .timing-panel.hidden { display: none; }
+  .timing-title { font-weight: 600; margin-bottom: 12px; color: #1e3a5f; }
+  .timing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 16px; font-size: 0.85rem; }
+  .timing-item { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
+  .timing-label { color: #666; }
+  .timing-value { font-weight: 600; color: #2d5a8a; font-family: monospace; }
+  .timing-total { font-weight: 700; color: #1e3a5f; font-size: 0.95rem; grid-column: 1 / -1; padding-top: 8px; border-top: 2px solid #d0d8e8; }
+  
+  .footer { text-align: center; padding: 16px; color: #888; font-size: 0.75rem; border-top: 1px solid #eee; }
+  @media (max-width: 600px) {
+    body { padding: 12px; }
+    header { padding: 16px; }
+    .api-config { position: static; margin-top: 12px; width: 100%; justify-content: center; }
+    .api-config input { min-width: 200px; }
+    .query-form { flex-direction: column; }
+    .btn { width: 100%; }
+    .meta-bar { flex-direction: column; gap: 8px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>GitLab RAG 查詢介面</h1>
+    <p class="subtitle">輸入問題，獲取帶來源引用的程式碼建議</p>
+    <div class="api-config">
+      <span>API:</span>
+      <input type="text" id="apiEndpoint" value="http://localhost:8001/suggest" placeholder="API endpoint URL">
+    </div>
+  </header>
+  <main>
+    <form class="query-form" id="queryForm">
+      <input type="text" class="query-input" id="questionInput" placeholder="輸入您的問題（支援中英文）..." autocomplete="off" required>
+      <button type="submit" class="btn" id="submitBtn">查詢</button>
+      <button type="button" class="btn btn-secondary" id="streamBtn" style="display:inline-block;">串流查詢</button>
+    </form>
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <p id="loadingText">查詢中，請稍候...</p>
+    </div>
+    <div class="error" id="errorBox"></div>
+    <section class="result-section" id="resultSection">
+      <div class="meta-bar">
+        <div class="meta-item">
+          <span class="meta-label">問題</span>
+          <span class="meta-value" id="resultQuestion"></span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">信心等級</span>
+          <span class="meta-value">
+            <span class="confidence-badge" id="confidenceBadge">—</span>
+          </span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">理由</span>
+          <span class="meta-value reason-text" id="confidenceReason"></span>
+        </div>
+      </div>
+      
+      <!-- 階段進度條 -->
+      <div class="stage-progress hidden" id="stageProgress">
+        <div class="stage-bar"><div class="stage-bar-fill" id="stageBarFill"></div></div>
+        <div class="stage-info">
+          <span class="stage-message" id="stageMessage">準備中...</span>
+          <span class="stage-percent" id="stagePercent">0%</span>
+        </div>
+      </div>
+      
+      <div class="suggestion-content" id="suggestionContent"></div>
+      
+      <!-- Timing 面板 -->
+      <div class="timing-panel hidden" id="timingPanel">
+        <div class="timing-title">⏱️ 各階段耗時統計</div>
+        <div class="timing-grid" id="timingGrid"></div>
+      </div>
+      
+      <div class="sources-section">
+        <h3 class="sources-title">引用來源 <span id="sourceCount">(0)</span></h3>
+        <div class="sources-list" id="sourcesList"></div>
+      </div>
+    </section>
+  </main>
+  <footer class="footer">
+    GitLab RAG MVP · 雙擊此 HTML 檔案即可使用 · API: <span id="footerApi">http://localhost:8001/suggest</span>
+  </footer>
+</div>
+<script>
+  // ===== 配置 =====
+  const DEFAULT_ENDPOINT = "http://localhost:8001/suggest";
+  const STREAM_ENDPOINT = "http://localhost:8001/suggest/stream";
+  const ENDPOINT_STORAGE_KEY = "rag_api_endpoint";
+
+  // ===== DOM 元素 =====
+  const $ = (id) => document.getElementById(id);
+  const input = $("questionInput");
+  const submitBtn = $("submitBtn");
+  const streamBtn = $("streamBtn");
+  const loading = $("loading");
+  const loadingText = $("loadingText");
+  const errorBox = $("errorBox");
+  const resultSection = $("resultSection");
+  const apiEndpointInput = $("apiEndpoint");
+  const footerApi = $("footerApi");
+  const form = $("queryForm");
+
+  // 結果區塊
+  const resultQuestion = $("resultQuestion");
+  const confidenceBadge = $("confidenceBadge");
+  const confidenceReason = $("confidenceReason");
+  const suggestionContent = $("suggestionContent");
+  const sourcesList = $("sourcesList");
+  const sourceCount = $("sourceCount");
+
+  // SSE 相關
+  const stageProgress = $("stageProgress");
+  const stageBarFill = $("stageBarFill");
+  const stageMessage = $("stageMessage");
+  const stagePercent = $("stagePercent");
+  const timingPanel = $("timingPanel");
+  const timingGrid = $("timingGrid");
+
+  // ===== 初始化 =====
+  function init() {
+    const saved = localStorage.getItem(ENDPOINT_STORAGE_KEY);
+    if (saved) {
+      apiEndpointInput.value = saved;
+      footerApi.textContent = saved;
+    }
+
+    form.addEventListener("submit", handleSubmit);
+    streamBtn.addEventListener("click", handleStreamSubmit);
+    apiEndpointInput.addEventListener("change", () => {
+      localStorage.setItem(ENDPOINT_STORAGE_KEY, apiEndpointInput.value.trim());
+      footerApi.textContent = apiEndpointInput.value.trim();
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        form.dispatchEvent(new Event("submit"));
+      }
+    });
+  }
+
+  // ===== 普通查詢處理 =====
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const question = input.value.trim();
+    if (!question) return;
+
+    setLoading(true);
+    hideError();
+    resultSection.classList.remove("visible");
+    stageProgress.classList.add("hidden");
+    timingPanel.classList.add("hidden");
+
+    try {
+      const endpoint = apiEndpointInput.value.trim() || DEFAULT_ENDPOINT;
+      const url = endpoint.includes("?") ? endpoint : endpoint + "?";
+      const fullUrl = url + new URLSearchParams({ question, top_k: 5 });
+
+      const res = await fetch(fullUrl, {
+        method: "GET",
+        headers: { "Accept": "application/json" }
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(`HTTP ${res.status}: ${err.detail || res.statusText}`);
+      }
+
+      const data = await res.json();
+      renderResult(data, question);
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ===== 串流查詢處理 (SSE) =====
+  async function handleStreamSubmit(e) {
+    e.preventDefault();
+    const question = input.value.trim();
+    if (!question) return;
+
+    setLoading(true);
+    hideError();
+    resultSection.classList.add("visible");   // ✅ 先顯示結果區塊，讓串流 token 可見
+    stageProgress.classList.remove("hidden");
+    timingPanel.classList.add("hidden");
+    stageBarFill.style.width = "0%";
+    stageMessage.textContent = "準備中...";
+    stagePercent.textContent = "0%";
+    suggestionContent.textContent = "";
+    sourcesList.innerHTML = "";
+
+    try {
+      const endpoint = apiEndpointInput.value.trim() || DEFAULT_ENDPOINT;
+      const streamUrl = endpoint.replace("/suggest", "/suggest/stream");
+      const url = streamUrl + "?" + new URLSearchParams({ question, top_k: 5 });
+
+      const res = await fetch(url, {
+        method: "GET",
+        headers: { "Accept": "text/event-stream" }
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(`HTTP ${res.status}: ${err.detail || res.statusText}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let suggestionBuffer = "";
+      let isComplete = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6);
+          try {
+            const event = JSON.parse(data);
+            handleSSEEvent(event);
+          } catch (e) {
+            console.warn("SSE parse error:", e, line);
+          }
+        }
+      }
+
+      if (!isComplete) {
+        // 處理剩餘 buffer
+        if (buffer.startsWith("data: ")) {
+          try {
+            const event = JSON.parse(buffer.slice(6));
+            handleSSEEvent(event);
+          } catch (e) {}
+        }
+      }
+
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      setLoading(false);
+      stageProgress.classList.add("hidden");
+    }
+  }
+
+  function handleSSEEvent(event) {
+    const stage = event.stage;
+    const progress = event.progress;
+
+    switch (stage) {
+      case "search":
+      case "confidence":
+      case "prompt":
+      case "generate":
+        stageProgress.classList.remove("hidden");
+        stageMessage.textContent = event.message;
+        stagePercent.textContent = progress + "%";
+        stageBarFill.style.width = progress + "%";
+        break;
+
+      case "search_done":
+      case "confidence_done":
+      case "prompt_done":
+      case "generate":
+        stageBarFill.style.width = progress + "%";
+        stagePercent.textContent = progress + "%";
+        break;
+
+      case "token":
+        // 逐字顯示
+        if (event.token) {
+          suggestionContent.textContent += event.token;
+          suggestionContent.scrollTop = suggestionContent.scrollHeight;
+        }
+        break;
+
+      case "complete":
+        // 完成
+        isComplete = true;
+        stageProgress.classList.add("hidden");
+        renderCompleteResult(event);
+        break;
+
+      default:
+        console.log("Unknown stage:", stage, event);
+    }
+  }
+
+  function renderCompleteResult(data) {
+    const timings = data.timings || {};
+    const confidence = data.confidence || "medium";
+    const suggestion = data.suggestion || "";
+    const sources = data.sources || [];
+    const confidenceReason = data.confidence_reason || "—";
+
+    // 基本資訊
+    resultQuestion.textContent = input.value.trim();
+    confidenceBadge.textContent = confidence.charAt(0).toUpperCase() + confidence.slice(1);
+    confidenceBadge.className = "confidence-badge confidence-" + confidence;
+    confidenceReason.textContent = confidenceReason;
+
+    // 建議內容
+    suggestionContent.innerHTML = marked.parse(suggestion);
+
+    // 來源
+    sourceCount.textContent = `(${sources.length})`;
+    sourcesList.innerHTML = sources.map((s, i) => `
+      <div class="source-item" data-index="${i}">
+        <div class="source-header" tabindex="0" role="button" aria-expanded="false" onclick="toggleSource(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSource(${i})}">
+          <div class="source-info">
+            <span class="source-file">${escapeHtml(s.file_path || "未知檔案")}</span>
+            <span class="source-chunk">chunk #${s.chunk_index ?? "?"}</span>
+            ${s.rrf_score !== undefined ? `<span class="source-score">rrf: ${s.rrf_score.toFixed(4)}</span>` : ""}
+          </div>
+          <span class="source-toggle">▼</span>
+        </div>
+        <div class="source-content">
+          <div class="source-preview">${escapeHtml(s.preview || "無預覽內容")}</div>
+        </div>
+      </div>
+    `).join("");
+
+    // Timing 面板
+    timingPanel.classList.remove("hidden");
+    renderTimings(timings);
+
+    resultSection.classList.add("visible");
+    resultSection.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function renderTimings(timings) {
+    const order = [
+      ["hybrid_search_ms", "混合檢索 (Embedding + BM25 + RRF)"],
+      ["confidence_eval_ms", "信心評估"],
+      ["prompt_build_ms", "提示詞構建"],
+      ["llm_generate_ms", "LLM 生成"],
+      ["total_ms", "總計"],
+    ];
+    timingGrid.innerHTML = order.map(([key, label]) => {
+      const val = timings[key];
+      if (val === undefined || val === 0) return "";
+      const isTotal = key === "total_ms";
+      return `
+        <div class="timing-item ${isTotal ? 'timing-total' : ''}">
+          <span class="timing-label">${label}</span>
+          <span class="timing-value">${val.toFixed(1)} ms</span>
+        </div>
+      `;
+    }).join("");
+  }
+
+  // ===== 普通查詢渲染（非串流）=====
+  function renderResult(data, question) {
+    resultQuestion.textContent = question;
+    const conf = data.confidence || "medium";
+    confidenceBadge.textContent = conf.charAt(0).toUpperCase() + conf.slice(1);
+    confidenceBadge.className = "confidence-badge confidence-" + conf;
+    confidenceReason.textContent = data.confidence_reason || "—";
+    suggestionContent.innerHTML = marked.parse(data.suggestion || "無建議內容");
+
+    const sources = data.sources || [];
+    sourceCount.textContent = `(${sources.length})`;
+    sourcesList.innerHTML = sources.map((s, i) => `
+      <div class="source-item" data-index="${i}">
+        <div class="source-header" tabindex="0" role="button" aria-expanded="false" onclick="toggleSource(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSource(${i})}">
+          <div class="source-info">
+            <span class="source-file">${escapeHtml(s.file_path || "未知檔案")}</span>
+            <span class="source-chunk">chunk #${s.chunk_index ?? "?"}</span>
+            ${s.rrf_score !== undefined ? `<span class="source-score">rrf: ${s.rrf_score.toFixed(4)}</span>` : ""}
+          </div>
+          <span class="source-toggle">▼</span>
+        </div>
+        <div class="source-content">
+          <div class="source-preview">${escapeHtml(s.preview || "無預覽內容")}</div>
+        </div>
+      </div>
+    `).join("");
+
+    // 如果有 timing
+    if (data.timings) {
+      timingPanel.classList.remove("hidden");
+      renderTimings(data.timings);
+    } else {
+      timingPanel.classList.add("hidden");
+    }
+
+    resultSection.classList.add("visible");
+    resultSection.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function setLoading(isLoading) {
+    loading.classList.toggle("visible", isLoading);
+    submitBtn.disabled = isLoading;
+    streamBtn.disabled = isLoading;
+    submitBtn.textContent = isLoading ? "查詢中..." : "查詢";
+    streamBtn.textContent = isLoading ? "串流中..." : "串流查詢";
+    input.disabled = isLoading;
+  }
+
+  function showError(msg) {
+    errorBox.textContent = msg;
+    errorBox.classList.add("visible");
+  }
+
+  function hideError() {
+    errorBox.classList.remove("visible");
+  }
+
+  function toggleSource(index) {
+    const item = sourcesList.querySelector(`.source-item[data-index="${index}"]`);
+    if (item) {
+      item.classList.toggle("open");
+      const header = item.querySelector(".source-header");
+      const expanded = item.classList.contains("open");
+      header.setAttribute("aria-expanded", expanded);
+    }
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  // 註冊全域函式供 inline onclick 使用
+  window.toggleSource = toggleSource;
+
+  // ===== 啟動 =====
+  init();
+</script>
+</body>
+</html>

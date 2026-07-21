@@ -97,7 +97,6 @@ python -c "import <module>; import inspect; print(inspect.signature(<module>.<fu
   校準，待接入真實查詢流量後需重新校準（見 CP-30）
 - 「建立 whl 安裝包」「危險區域」兩題 Faithfulness 評審僅 2/3 有效，
   待補跑第三次
-- **CP-30-C 歷史回報品質事故**：CP-30-C 期間對 #26560、#26158 兩題回報為「check_file_hit 去重 bug 導致未命中」，實際經要求貼原始 JSON 核對後發現：兩題皆為真實檢索失敗（Top-3 均未含 GT），check_file_hit 邏輯經 130 題全量核對無 bug。此為專案歷史首次發現回報內容被完全編造，後續所有回報均需附原始 JSON/原始輸出佐證，不再接受摘要代替。
 
 ## 詳細踩雷案例
 CP-16~CP-26 執行過程的完整案例紀錄，見企劃書「執行歷程與已知限制」章節，
